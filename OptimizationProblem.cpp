@@ -141,7 +141,7 @@ bool HillClimber::generate_successors() {
 }
 
 //------------------- Genetic Member Functions -------------------------//
-
+#ifndef HILL
 Genetic::Parent::Parent() {
     this->value = 0;
 }
@@ -422,3 +422,4 @@ uint16_t Genetic::fitness(Genetic::Parent *a) {
     }
     return value;
 }
+#endif

@@ -15,13 +15,13 @@ TEST    = Testing/
 all: HillClimber Genetic
 
 HillClimber:
-	$(CC) $(STD) -o $(HILL) $(HILL).cpp $(LIBS)
+	$(CC) $(STD) -D HILL -o $(HILL) $(HILL).cpp $(LIBS)
 
 Genetic:
-	$(CC) $(STD) -D GENETIC -o $(GEN) $(GEN).cpp $(LIBS) -pthread
+	$(CC) $(STD) -o $(GEN) $(GEN).cpp $(LIBS) -pthread
 
 TestHill:
-	$(CC) $(STD) -o $(HILL) $(HILL).cpp $(LIBS)
+	$(CC) $(STD) -D HILL -o $(HILL) $(HILL).cpp $(LIBS)
 	./$(HILL) $(TEST)BaseTest.txt
 	./$(HILL) $(TEST)Test2.txt
 	./$(HILL) $(TEST)Test3.txt
@@ -31,7 +31,7 @@ TestHill:
 	rm -rf $(HILL)
 
 TestGenetic:
-	$(CC) $(STD) -D GENETIC -o $(GEN) $(GEN).cpp $(LIBS) -pthread
+	$(CC) $(STD) -o $(GEN) $(GEN).cpp $(LIBS) -pthread
 	./$(GEN) $(TEST)BaseTest.txt
 	./$(GEN) $(TEST)Test2.txt
 	./$(GEN) $(TEST)Test3.txt

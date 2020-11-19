@@ -102,6 +102,7 @@ private:
     bool generate_successors();
 };
 
+#ifndef HILL
 // Distributed implementation of the Genetic algorithm using p_threads.
 //
 // Heuristic is the same as in Hill Climbing algorithm. Genome is represented
@@ -230,3 +231,4 @@ private:
     // Constructs the initial game state, or resets the state if stuck in a min or max.
     void reset_search();
 };
+#endif
