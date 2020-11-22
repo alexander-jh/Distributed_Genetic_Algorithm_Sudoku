@@ -7,6 +7,8 @@
 // Author:     Alex Hoke
 #include "OptimizationProblem.hpp"
 
+#include <random>
+
 //------------------- OptimizationProblem Member Functions -------------------------//
 
 void OptimizationProblem::generate_state() {
@@ -29,6 +31,7 @@ void OptimizationProblem::generate_state() {
         }
     }
     current->value = evaluate(current);
+    current->next = priority_queue<pair<uint16_t, Node *>>();
 }
 
 OptimizationProblem::Node::Node(uint16_t dim) {
@@ -49,7 +52,7 @@ OptimizationProblem::OptimizationProblem(const char *file) {
     generate_state();
 }
 
-uint16_t OptimizationProblem::evaluate(Node *state) {
+uint16_t OptimizationProblem::evaluate(Node *state) const {
     uint16_t value = 0;
     uint16_t grid = initial->state->cell;
     uint16_t dim = initial->state->dim;
@@ -77,19 +80,21 @@ uint16_t OptimizationProblem::evaluate(Node *state) {
     return value;
 }
 
-void OptimizationProblem::report_results(bool status) const {
-    if(status) {
+void OptimizationProblem::report_results(Node *node, uint16_t goal, uint64_t total) {
+    uint16_t dim = node->board.size();
+    if(node->value == goal) {
         printf("\nSolution found!\n");
-        for(uint16_t i = 0; i < initial->state->dim; ++i) {
-            for(uint16_t j = 0; j < initial->state->dim; ++j) {
-                printf("%d\t", current->board[i][j]);
-            }
-            printf("\n");
-        }
-        printf("Iterations:\t%lu\n",iterations);
     } else {
-        printf("\nNo solution found.\n");
+        printf("\nNon goal state found.\n");
+        printf("\nBEST SOLUTION:\n");
     }
+    for(uint16_t i = 0; i < dim; ++i) {
+        for(uint16_t j = 0; j < dim; ++j) {
+            printf("%d\t", node->board[i][j]);
+        }
+        printf("\n");
+    }
+    printf("Iterations:\t%lu\n", total);
 }
 
 OptimizationProblem::OptimizationProblem() {
@@ -104,44 +109,60 @@ HillClimber::HillClimber(const char *file) {
     state = new OptimizationProblem(file);
 }
 
-bool HillClimber::hill_climb() {
+OptimizationProblem::Node *HillClimber::hill_climb() {
     bool goal_found = false;
-    OptimizationProblem::Node *curr;
-    while(!goal_found) {
-        curr = state->current;
+    // Counter for no improvement in next candidate state
+    uint16_t no_improvement = 0;
+    while(!goal_found && state->total_iterations < UINT64_MAX) {
+        // Get successors of current node
         goal_found = generate_successors();
-        printf("Current Value: %d\t\t Successor Value: %d\n", curr->value, curr->next.top().first);
-        if(curr->value < curr->next.top().first || goal_found) {
-            state->current = curr->next.top().second;
+        // Report current node and next best candidate
+        printf("Current Value: %d\t\t Successor Value: %d\n", state->current->value,
+               state->current->next.top().first);
+        // If candidate state is better set current state to candidate
+        if(state->current->value < state->current->next.top().first || goal_found) {
+            state->current = state->current->next.top().second;
         } else {
-            printf("No valid successor reset game state.\n");
-            state->generate_state();
+        // Otherwise increment plateau counter
+            no_improvement++;
+        // If at plateau reset algorithm
+            if(no_improvement == PLATEAU) {
+                state->generate_state();
+                no_improvement = 0;
+            }
         }
-        if (state->iterations != UINT64_MAX) {state->iterations++;} else {break;}
+        state->total_iterations++;
     }
-    return goal_found;
+    return state->current;
 }
 
 
 bool HillClimber::generate_successors() {
-    // Adjust value of missing places
+    // Adjust a singular value of missing places from current state
     for(auto &it: state->initial->state->missing) {
-        auto *test = new OptimizationProblem::Node(state->current->board.size());
-        uint16_t row = it->first;
-        uint16_t col = it->second;
-        test->board = state->current->board;
-        uint16_t num = state->range(state->generator);
-        // Update value on board
-        test->board[row][col] = num;
-        test->value = state->evaluate(test);
-        state->current->next.push({test->value, test});
-        if(state->current->next.top().first == state->goal) return true;
+        uint16_t row = it.first;
+        uint16_t col = it.second;
+        // Test all possible changes of single position value not equal
+        // to the current value
+        for (uint16_t i = 1; i < state->initial->state->dim+1; ++i) {
+            if(state->current->board[row][col] != i) {
+                auto *test = new OptimizationProblem::Node(state->current->board.size());
+                test->board = state->current->board;
+                uint16_t num = state->range(state->generator);
+                // Update value on board
+                test->board[row][col] = num;
+                test->value = state->evaluate(test);
+                state->current->next.push({test->value, test});
+                if(test->value == state->goal) return true;
+            }
+        }
     }
     return false;
 }
 
 //------------------- Genetic Member Functions -------------------------//
 #ifndef HILL
+
 Genetic::Parent::Parent() {
     this->value = 0;
 }
@@ -154,80 +175,56 @@ Genetic::Genetic(const char *file) {
     pthread_attr_init(&attr);
     auto *start = new OptimizationProblem(file);
     // Create initial test state
-    for(const auto it : start->current->board)
+    for(const auto& it : start->current->board)
         initial.push_back(it);
     range = uniform_int_distribution<uint16_t>(1,start->initial->state->dim);
     // Move all missing pair locations over
     for(auto it : start->initial->state->missing) {
-        miss.insert(*it);
+        missing.push_back(it);
     }
     goal = start->goal;
     delete start;
-    resets = 0;
-    reset_search();
+    iterations = 0;
+    reset_search(0);
 }
 
-void Genetic::reset_search() {
-    // Create initial population with 2*MAX_THREADS generated children
-    missing.clear();
-    uint16_t dim = initial.size();
-    uint16_t cell = Board::isqrt(dim);
-    for(uint16_t i = 0; i < 4*MAX_THREADS; ++i) {
-        // Generate children by mapping random gene not already in sub-matrix at
-        // missing positions
+void Genetic::reset_search(uint16_t elite) {
+    for(int i = 0; i < POP_MODIFIER*MAX_THREADS - elite; ++i) {
         auto *p = new Parent;
-        for(uint16_t g = 0; g < dim; ++g) {
-            unordered_set<uint16_t> cell_count;
-            // Get existing elements from each sub-matrix
-            for(uint16_t j = 0; j < cell; ++j) {
-                for (uint16_t k = 0; k < cell; ++k) {
-                    uint16_t R = cell * (g / cell) + j;
-                    uint16_t C = cell * (g % cell) + k;
-                    auto it = miss.find(make_pair(R,C));
-                    if(it == miss.end()) {
-                        cell_count.insert(initial[R][C]);
-                    } else if (i == 0) {
-                        missing.push_back(*it);
-                    }
-                }
-            }
-            // Insert unique missing genes
-            while(cell_count.size() != dim) {
-                uint16_t val = range(generator);
-                while(cell_count.find(val) != cell_count.end()) {
-                    val = range(generator);
-                }
-                p->genes.push_back(val);
-                cell_count.insert(val);
-            }
-        }
+        for(int j = 0; j < missing.size(); ++j) p->genes.push_back(range(generator));
         population.push_back(p);
     }
     // Generate initial fitness for each parent
-    for(int i = 0; i < MAX_THREADS; ++i)
-        pthread_create(&thread_pool[i], &attr, &Genetic::update_help, this);
-    // Spinlock until priority queue has emptied
-    while(!(thread_done = population.empty()));
-    for(int i = 0; i < MAX_THREADS; ++i)
-        pthread_join(thread_pool[i], nullptr);
-    iterations = 0;
+    buffer_in = 0;
+    for(auto & i : thread_pool)
+        pthread_create(&i, &attr, &Genetic::update_help, this);
+    for(auto & i : thread_pool)
+        pthread_join(i, nullptr);
 }
 
 bool Genetic::genetic_run() {
+    uniform_int_distribution<uint16_t> rand;
+    rand = uniform_int_distribution<uint16_t>(1,10);
     goal_met = false;
     // Recombine until goal is found
     while(!goal_met) {
-        if(iterations == 100) {
-            resets++;
+        if(rand(generator) == 1) {
             printf("\n RESET SEARCH \n");
+            vector<Parent *> elite(POP_MODIFIER);
+            sort(population.begin(), population.end(), Parent::comparator());
+            for(int i = 0; i < POP_MODIFIER; ++i)
+                    elite[i] = new Parent(population.back());
             population.clear();
-            reset_search();
+            reset_search(POP_MODIFIER);
+            while(!elite.empty()) {
+                population.push_back(new Parent(elite.back()));
+                elite.pop_back();
+            }
         }
-        thread_done = false;
-        for(int i = 0; i < MAX_THREADS; ++i)
-            pthread_create(&thread_pool[i], &attr, &Genetic::thread_help, this);
-        for(int i = 0; i < MAX_THREADS; ++i)
-            pthread_join(thread_pool[i], nullptr);
+        for(auto & i : thread_pool)
+            pthread_create(&i, &attr, &Genetic::thread_help, this);
+        for(auto & i : thread_pool)
+            pthread_join(i, nullptr);
         iterations++;
     }
     return goal_met;
@@ -237,20 +234,12 @@ void *Genetic::thread_run() {
     // Obtain mutex lock to take the two largest parents
     vector<Parent *> a;
     pthread_mutex_lock(&this->mutex_pop_out);
-    if(!this->goal_met) {
-        // Perform selection
-        selection(a);
-    }
+    // Perform selection
+    if(!this->goal_met) selection(a);
     pthread_mutex_unlock(&this->mutex_pop_out);
-    if(this->goal_met) pthread_exit(nullptr);
+    if(this->goal_met) pthread_exit(this);
     // Crossover
-    crossover(a[0],a[1]);
-    // One percent chance of mutation
-    if(this->mutate(this->generator) == 1) mutation(a[0]);
-    if(this->mutate(this->generator) == 1) mutation(a[1]);
-    // Get new fitness value
-    a[0]->value = fitness(a[0]);
-    a[1]->value = fitness(a[1]);
+    a = crossover(a[0],a[1]);
     printf("Parent A Value: %d\tParent B Value: %d\n",a[0]->value, a[1]->value);
     // Reacquire lock
     pthread_mutex_lock(&this->mutex_pop_out);
@@ -260,7 +249,7 @@ void *Genetic::thread_run() {
         this->population.push_back(a[1]);
     }
     pthread_mutex_unlock(&this->mutex_pop_out);
-    pthread_exit(nullptr);
+    pthread_exit(this);
 }
 
 void Genetic::genetic_report(bool status) {
@@ -279,112 +268,76 @@ void Genetic::genetic_report(bool status) {
         }
         printf("\nSOLUTION FOUND!\n");
     // Print results
-        for(int i = 0; i < initial.size(); ++i) {
+        for(auto & i : initial) {
             for(int j = 0; j < initial.size(); ++j) {
-                printf("%d\t", initial[i][j]);
+                printf("%d\t", i[j]);
             }
             printf("\n");
         }
-        printf("Iterations: %d\n", iterations+(100*resets));
+        printf("Iterations: %lu\n", iterations);
     } else {
         printf("\nNO SOLUTION FOUND!\n");
     }
 }
 
-void Genetic::crossover(Genetic::Parent *a, Genetic::Parent *b) {
-    uint16_t mid = range(generator);
+vector<Genetic::Parent *> Genetic::crossover(Genetic::Parent *a, Genetic::Parent *b) {
     auto *c = new Parent, *d = new Parent;
-    for(uint16_t i = 0; i < mid; i++) {
-        c->genes.push_back(b->genes[i]);
-        d->genes.push_back(a->genes[i]);
+    uniform_real_distribution<double> prob(0,1);
+    for(int i = 0; i < a->genes.size(); ++i) {
+        double roll = prob(generator);
+        (roll <= 0.5) ? c->genes.push_back(a->genes[i]) : c->genes.push_back(b->genes[i]);
+        roll = prob(generator);
+        (roll <= 0.5) ? d->genes.push_back(a->genes[i]) : d->genes.push_back(b->genes[i]);
     }
-    for(int i = mid; i < a->genes.size(); ++i) {
-        c->genes.push_back(a->genes[i]);
-        d->genes.push_back(b->genes[i]);
+    // One percent chance of mutation
+    if(this->mutate(this->generator) == 1) mutation(c);
+    if(this->mutate(this->generator) == 1) mutation(d);
+    // Get new fitness value
+    c->value = fitness(c);
+    d->value = fitness(d);
+    // Get fist max of the four parents
+    vector<pair<uint16_t, Parent *>> candidates = {{a->value,a},{b->value,b},
+                                                   {c->value,c},{d->value,d}};
+    sort(candidates.begin(),candidates.end());
+    vector<Parent *> ret;
+    for(uint16_t i = 0; i < 4; ++i) {
+        if(i < 2) {
+            ret.push_back(candidates.back().second);
+        } else {
+            delete(candidates.back().second);
+        }
+        candidates.pop_back();
     }
-    a = new Parent(c), b = new Parent(d);
-    delete c, d;
+    return ret;
 }
 
-// Tournament based selection
 void Genetic::selection(vector<Parent *> &pool) {
-    // Randomly select 4 parents
-    for(uint16_t i = 0; i < 4; ++i) {
-        uniform_int_distribution<uint16_t> pos =
-                uniform_int_distribution<uint16_t> (0, population.size()-1);
-        uint16_t loc = pos(generator);
-        if(i < 2) {
-            pool.push_back(new Parent(population[loc]));
-            population.erase(population.begin()+loc);
-        } else {
-            uint16_t min;
-            (pool[0]->value >= pool[1]->value) ? (min = 1) : (min = 0);
-            if(population[loc]->value > pool[min]->value) {
-                population.push_back(new Parent(pool[min]));
-                pool[min] = new Parent(population[loc]);
-                population.erase(population.begin()+loc);
-            }
-        }
-    }
+    uint16_t loc = uniform_int_distribution<uint16_t>(0, population.size() - 1)(generator);
+    pool.push_back(population[loc]);
+    population.erase(population.begin() + loc);
+    pool.push_back(population.back());
+    population.pop_back();
 }
 
 void Genetic::mutation(Genetic::Parent *a) {
-    unordered_map<uint16_t, uint16_t> count;
-    uint16_t max, ele;
-    for(auto it : a->genes) {
-        auto pos = count.find(it);
-        if(pos == count.end()) {
-            count.insert({it, 1});
-            if(max == 0) {
-                max = 1;
-                ele = it;
-            }
-        } else {
-            pos->second++;
-            if(pos->second > max) {
-                max = pos->second;
-                ele = pos->first;
-            }
-        }
-    }
-    uniform_int_distribution<uint16_t> dis = uniform_int_distribution<uint16_t>(1,max);
-    uint16_t place = dis(generator);
-    for(auto it : a->genes) {
-        if(it == ele) {
-            place--;
-            if(place == 0) it = range(generator);
-        }
-    }
+    uniform_int_distribution<uint16_t> dis;
+    dis = uniform_int_distribution<uint16_t>(0,a->genes.size()-1);
+    a->genes[dis(generator)] = range(generator);
 }
 
 void *Genetic::update_fitness(void *arg) {
-    // Since 2*MAX_THREAD is population size each thread takes two
-    Genetic::Parent *a, *b, *c, *d;
+    vector<uint16_t> pos;
     // Lock the population vector
-    pthread_mutex_lock(&this->mutex_pop_out);
-    // Remove last individual
-    a = this->population.back();
-    this->population.pop_back();
-    b = this->population.back();
-    this->population.pop_back();
-    c = this->population.back();
-    this->population.pop_back();
-    d = this->population.back();
-    this->population.pop_back();
-    pthread_mutex_unlock(&this->mutex_pop_out);
-    // Drop lock and calculate fitness
-    a->value = fitness(a);
-    b->value = fitness(b);
-    c->value = fitness(c);
-    d->value = fitness(d);
-    // Re-obtain lock to insert updated individual
-    pthread_mutex_lock(&this->mutex_pop_in);
-    while(!this->thread_done);
-    this->population.push_back(a);
-    this->population.push_back(b);
-    this->population.push_back(c);
-    this->population.push_back(d);
-    pthread_mutex_unlock(&this->mutex_pop_in);
+    while(buffer_in < this->population.size()) {
+        pthread_mutex_lock(&this->mutex_pop_out);
+        // Remove last individual
+        pos.push_back(buffer_in);
+        buffer_in++;
+        // Drop lock and calculate fitness
+        pthread_mutex_unlock(&this->mutex_pop_out);
+        if(buffer_in < this->population.size())
+            this->population[pos.back()]->value = fitness(this->population[pos.back()]);
+    }
     pthread_exit(this);
 }
 
@@ -393,11 +346,11 @@ uint16_t Genetic::fitness(Genetic::Parent *a) {
     uint16_t cell = Board::isqrt(initial.size());
     uint16_t dim = initial.size();
     vector<unordered_set<uint16_t>> grid = vector<unordered_set<uint16_t>>(dim);
-    vector<vector<uint16_t>> temp = *new vector<vector<uint16_t>>(initial);
+    auto *temp = new vector<vector<uint16_t>>(initial);
     // Insert missing elements
     uint16_t index = 0;
     for(const auto& it : missing) {
-        temp[it.first][it.second] = a->genes[index];
+        (*temp)[it.first][it.second] = a->genes[index];
         index++;
     }
     for(int i = 0; i < dim; i++) {
@@ -405,21 +358,22 @@ uint16_t Genetic::fitness(Genetic::Parent *a) {
         unordered_set<uint16_t> col;
         for(uint16_t j = 0; j < dim; j++) {
             // Count unique in each possible row
-            row.insert(temp[i][j]);
+            row.insert((*temp)[i][j]);
             // Count unique in each possible col
-            col.insert(temp[j][i]);
+            col.insert((*temp)[j][i]);
             // Count unique in each grid g(i,j) for each element in sub-matrix,
             // Inverse of transformation f described in generate_state()
             // f':[0,3],[0,3]->[0,3]x[0,1]x[0,1]
             // f'(i,j) = (g,row,col)
             uint16_t g = cell * (i / cell) + (j / cell);
-            grid[g].insert(temp[i][j]);
+            grid[g].insert((*temp)[i][j]);
         }
         value += row.size() + col.size();
     }
     for(const auto& it : grid) {
         value += it.size();
     }
+    delete temp;
     return value;
 }
 #endif

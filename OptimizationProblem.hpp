@@ -9,7 +9,11 @@
 #include "SudokuBoard.hpp"
 #include <pthread.h>
 
-#define MAX_THREADS     16
+#define MAX_THREADS     8
+#define POP_MODIFIER    4
+#define PLATEAU         (uint16_t) 1
+#define MAX_ITER        (uint32_t) 10000
+
 
 // Simple XOR hash algorithm for dealing with undefined objects
 struct pair_hash {
@@ -51,8 +55,8 @@ public:
     }Node;
     // Current state representation
     Node *current;
-    // Number of iterations
-    uint64_t iterations = 0;
+    // Number of total_iterations
+    uint64_t total_iterations = 0;
     // Default constructor
     OptimizationProblem();
     // Constructor with file input
@@ -65,10 +69,10 @@ public:
     // state by counting the sum total of all unique elements in each row, column,
     // and in each sub-matrix. Higher value implies better state of the board.
     // @param *state    -   current state to be evaluated
-    uint16_t evaluate(Node *state);
+    uint16_t evaluate(Node *state) const;
     // Reports the results from the algorithm
     // @param status    -   boolean to distinguish if solution was found
-    void report_results(bool status) const;
+    static void report_results(Node *state, uint16_t goal, u_int64_t total);
     // Initial board representation from parsing class
     SudokuBoard *initial;
     // Solution state constant, goal = 3 * dim
@@ -91,9 +95,10 @@ public:
     // Default destructor
     ~HillClimber() = default;
     // Control flow for the algorithm
-    bool hill_climb();
+    OptimizationProblem::Node *hill_climb();
     // Reports the results
-    inline void hill_report(bool status) {state->report_results(status);};
+    inline void hill_report(OptimizationProblem::Node *node)
+        {OptimizationProblem::report_results(node, state->goal, state->total_iterations);};
 private:
     // Present state representation
     OptimizationProblem *state;
@@ -116,7 +121,7 @@ private:
 // Mutation is a 1% chance, randomly selects and changes the value with
 // the highest count in the current state
 //
-// Resets are done every 100 iterations if solution not found
+// Resets are done every 100 total_iterations if solution not found
 //
 // Threads are being used based on a cell implementation. Mutual exclusion is
 // help on the population whenever selection or reinsertion is done. However,
@@ -150,6 +155,11 @@ public:
             value = node.value;
             return *this;
         }
+        struct comparator {
+            inline bool operator()(const Parent *p1, const Parent *p2) {
+                return p1->value < p2->value;
+            }
+        };
     } Parent;
     // Constructor for when file is passed
     // @param *file -   pointer to file location
@@ -165,25 +175,25 @@ public:
     void genetic_report(bool status);
 private:
     // Iteration and reset count for the program
-    uint16_t iterations, resets;
+    uint64_t iterations{};
     // Population mutex lock for initial input
-    pthread_mutex_t mutex_pop_in;
+    pthread_mutex_t mutex_pop_in{};
     // Population mutex lock for taking out individuals
-    pthread_mutex_t mutex_pop_out;
+    pthread_mutex_t mutex_pop_out{};
     // Default pthread attr
-    pthread_attr_t attr;
+    pthread_attr_t attr{};
     // Array for pthread pool
-    pthread_t thread_pool[MAX_THREADS];
+    pthread_t thread_pool[MAX_THREADS]{};
     // Direct (i,j) position of each missing element in original state
     vector<pair<uint16_t, uint16_t>> missing;
     // Goal state 3*dim
-    uint16_t goal;
+    uint16_t goal{};
     // End state achieved declared in the private name space to message
     // threads to quit as soon as a goal state is found
-    bool goal_met;
+    bool goal_met{};
     // Boolean declared at name space for initial construction of the population.
     // Stalls threads until population is empty to prevent race conditions
-    bool thread_done;
+    bool thread_done{};
     // Range of random number such that [1,dim+1]
     uniform_int_distribution<uint16_t> range;
     // Generate random number
@@ -193,15 +203,15 @@ private:
     // NxN representation of the board state. Used for copy to calculate heuristic
     vector<vector<uint16_t>> initial;
     // Population of parent nodes
-    vector<Parent *> population;
-    // Hash set for ensuring proper ordering of the gene string
-    unordered_set<pair<uint16_t, uint16_t>, pair_hash> miss;
+    vector<Parent *> population{};
+    uint16_t buffer_in;
+    uint16_t buffer_out;
     // Conducts a random sliding window crossover. Randomly generates an index position
     // in [0,gene.size]. Direct copies from first parent, then fills rest from second
     // parent. Second child is created doing the opposite.
     // @param *a    -   first candidate parent node
     // @param *b    -   second candidate parent node
-    void crossover(Parent *a, Parent *b);
+    vector<Parent*> crossover(Parent *a, Parent *b);
     // Conducts mutation, 1 in 100 chance of mutation
     // @param *a    -   candidate node for mutation
     void mutation(Parent *a);
@@ -229,6 +239,6 @@ private:
     // Similar helper method as previously detailed.
     inline static void *thread_help(void *context) {return ((Genetic *) context)->thread_run();};
     // Constructs the initial game state, or resets the state if stuck in a min or max.
-    void reset_search();
+    void reset_search(uint16_t elite);
 };
 #endif

@@ -11,8 +11,8 @@ int main(int argv, char **argc) {
     // Create new HillClimber object
     auto hill = new HillClimber(*(argc+1));
     // Run algorithm
-    bool status = hill->hill_climb();
+    OptimizationProblem::Node *solution = hill->hill_climb();
     // Report Results
-    hill->hill_report(status);
+    hill->hill_report(solution);
     return 0;
 }

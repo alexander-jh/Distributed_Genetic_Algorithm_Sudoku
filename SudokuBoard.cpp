@@ -11,7 +11,7 @@ Board::Board(uint16_t dim) {
     this->dim = dim;
     this->cell = isqrt(dim);
     // Allocate heap space for missing
-    this->missing = *(new vector<pair<uint16_t, uint16_t> *>);
+    this->missing = vector<pair<uint16_t, uint16_t>>();
     // Create individual pre-sized vectors
     for(uint16_t i = 0; i < dim; i++)
     this->state.emplace_back(*new unordered_set<uint16_t>,
@@ -36,7 +36,7 @@ SudokuBoard::SudokuBoard(const char *file) {
 
 void SudokuBoard::make_board(const char *file) {
     // Declare buffer open file
-    char buffer[9];
+    char buffer[10];
     FILE *in = fopen(file, "r");
     // Return error if file invalid
     if(!in) {
@@ -54,21 +54,18 @@ void SudokuBoard::make_board(const char *file) {
         auto *board = new Board(first);
         uint16_t row = 0;
         // Parse file to EOF
-        while (fgets(buffer, (board->dim + board->cell) * sizeof(char) + board->cell, in)) {
+        while (fgets(buffer, (board->dim + board->cell), in)) {
             uint16_t V, R, C;
-            char *read;
             // Read line
             for (int i = 0; i < board->dim; ++i) {
                 // Get char and read into frame
-                first = buffer[i];
+                first = (unsigned char) buffer[i];
                 V = (i/board->cell) + board->cell*(row/board->cell);
                 R = row % board->cell;
                 C = i % board->cell;
                 if (first == '*') {
                     board->state[V].second[R][C] = first;
-                    board->missing.push_back(new pair<uint16_t, uint16_t>);
-                    board->missing[board->missing.size() - 1]->first = row;
-                    board->missing[board->missing.size() - 1]->second = i;
+                    board->missing.emplace_back(row, i);
                 } else {
                     atoui(&first);
                     // Populate board->state[cell][row][col]
@@ -78,6 +75,7 @@ void SudokuBoard::make_board(const char *file) {
             row++;
         }
         this->state = board;
+        fclose(in);
     } else {
         fprintf(stderr, "\nERROR: Invalid board dimension.\n");
         fclose(in);
@@ -106,9 +104,9 @@ void SudokuBoard::atoui(uint16_t *out) {
     *out = *out - '0';
 }
 
-void SudokuBoard::vector_contains() {
+void SudokuBoard::vector_contains() const {
     unordered_set<uint16_t> *ref;
-    uint16_t temp = 0;
+    uint16_t temp;
     // Loop over each sub-matrix
     for(uint16_t i = 0; this->state->dim > i; ++i) {
         for (uint16_t j = 0; j < this->state->cell; ++j) {

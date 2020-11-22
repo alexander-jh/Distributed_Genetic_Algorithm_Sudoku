@@ -6,6 +6,7 @@
 // Date:       11/19/2020
 // Author:     Alex Hoke
 #include <string>
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -27,7 +28,7 @@ using namespace std;
 //  @param  cell    -   dimension of of sub matrices, sqrt(dim)
 typedef struct Board {
     vector<pair<unordered_set<uint16_t>, vector<vector<uint16_t>>>> state;
-    vector<pair<uint16_t,uint16_t> *>                               missing;
+    vector<pair<uint16_t,uint16_t>>                                 missing;
     uint16_t                                                        dim;
     uint16_t                                                        cell;
     // Constructor to ensure proper vector space is allocated
@@ -61,5 +62,5 @@ private:
     // @param *out  -   character to convert
     static void atoui(uint16_t *out);
     // Fill set with elements observed in each vector to verify initial state
-    void vector_contains();
+    void vector_contains() const;
 };
